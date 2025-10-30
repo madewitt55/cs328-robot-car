@@ -1,20 +1,30 @@
 const byte HIGHBEAM_LEFT = 47;
 const byte HIGHBEAM_RIGHT = 41;
 
-void toggleHighbeams() {
-  bool state = digitalRead(HIGHBEAM_LEFT);
-  Serial.println(state);
-  digitalWrite(HIGHBEAM_LEFT, !state);
-  digitalWrite(HIGHBEAM_RIGHT, !state);
+const byte MOTOR_PWM_A = 4;
+const byte ENCODER_A_1 = 2;
+const byte ENCODER_A_2 = 3;
+const byte INA1A = 32;
+const byte INA2A = 34;
+
+const byte MOTOR_PWM_B = 5;
+const byte ENCODER_B_1 = 18;
+const byte ENCODER_B_2 = 19;
+const byte INA1B = 30;
+const byte INA2B = 36;
+
+void toggleHighbeams(void* state) {
+  digitalWrite(HIGHBEAM_LEFT, state);
+  digitalWrite(HIGHBEAM_RIGHT, state);
 }
 
 struct Command {
   String command;
-  void (*action)();
+  void (*action)(void* arg);
 };
 
 const Command VALID_COMMANDS[] = {
-  {"toggle-highbeams", toggleHighbeams}
+  {"highbeams-on", toggleHighbeams}
 };
 
 /// @brief Reads a message sent via serial
@@ -36,16 +46,50 @@ String readMessage() {
   return message;
 }
 
+int INA1A_count = 0;
+int INA1B_count = 0;
+int INA2A_count = 0;
+int INA2B_count = 0;
+
+void encoderIncrement() {
+  INA1A_count++;
+  INA1B_count++;
+  INA2A_count++;
+  INA2B_count++;
+}
+
 void setup() {
   Serial2.begin(38400);
   Serial.begin(9600);
+
+  pinMode(MOTOR_PWM_A, OUTPUT);
+  pinMode(INA1A, OUTPUT);
+  pinMode(INA2A, OUTPUT);
+  pinMode(MOTOR_PWM_B, OUTPUT);
+  pinMode(INA1B, OUTPUT);
+  pinMode(INA2B, OUTPUT);
+
+  pinMode(ENCODER_A_1, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_A_1), encoderIncrement, FALLING);
+}
+
+float readRPMs(int* counter) {
+  *counter = 0;
+  //delay(100);
+  return (*counter) * 3.125;
 }
 
 void loop() {
-  String command = readMessage();
-  for (Command com: VALID_COMMANDS) {
-    if (com.command == command) {
-      com.action();
-    }
-  }
+  analogWrite(MOTOR_PWM_A, 50);
+  digitalWrite(INA1A, HIGH);
+  digitalWrite(INA2A, LOW);
+
+  Serial.println(readRPMs(INA1A_count));
+
+  // String command = readMessage();
+  // for (Command com: VALID_COMMANDS) {
+  //   if (com.command == command) {
+  //     com.action();
+  //   }
+  // }
 }

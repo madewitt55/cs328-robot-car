@@ -1,21 +1,35 @@
-const String VALID_COMMANDS[] = {
-  "toggle-headlights"
+const byte HIGHBEAM_LEFT = 47;
+const byte HIGHBEAM_RIGHT = 41;
+
+void toggleHighbeams() {
+  bool state = digitalRead(HIGHBEAM_LEFT);
+  Serial.println(state);
+  digitalWrite(HIGHBEAM_LEFT, !state);
+  digitalWrite(HIGHBEAM_RIGHT, !state);
+}
+
+struct Command {
+  String command;
+  void (*action)();
+};
+
+const Command VALID_COMMANDS[] = {
+  {"toggle-highbeams", toggleHighbeams}
 };
 
 /// @brief Reads a message sent via serial
 ///
 /// Message will be converted to an all-lowercase string
 ///
-/// @param serial Reference to a hardware serial port
 /// @return The message sent via serial
-String readMessage(HardwareSerial &serial) {
+String readMessage() {
   String message = "";
 
-  while (serial.available()) {
-    char c = serial.read();
+  while (Serial2.available()) {
+    char c = Serial2.read();
     if (c == '\n') break; // End of string
 
-    message += tolower(c);
+    message += char(tolower(c));
     delay(2); // Small delay to let bytes arrive
   }
 
@@ -28,10 +42,10 @@ void setup() {
 }
 
 void loop() {
-  String command = readMessage(&Serial2);
-  switch(command) {
-    case "toggle-headlights":
-      Serial.println("toggling headlights");
-      break;
+  String command = readMessage();
+  for (Command com: VALID_COMMANDS) {
+    if (com.command == command) {
+      com.action();
+    }
   }
 }

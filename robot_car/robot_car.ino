@@ -1,6 +1,9 @@
 const byte HIGHBEAM_LEFT = 47;
 const byte HIGHBEAM_RIGHT = 41;
 
+const byte FRONT_BLINKER_LEFT = 49;
+const byte FRONT_BLINKER_RIGHT = 43;
+
 const byte MOTOR_PWM_A = 4;
 const byte ENCODER_A_1 = 2;
 const byte ENCODER_A_2 = 3;
@@ -13,18 +16,31 @@ const byte ENCODER_B_2 = 19;
 const byte INA1B = 30;
 const byte INA2B = 36;
 
-void toggleHighbeams(void* state) {
+void toggleHighbeams(void* _) {
+  bool state = digitalRead(HIGHBEAM_LEFT);
   digitalWrite(HIGHBEAM_LEFT, state);
   digitalWrite(HIGHBEAM_RIGHT, state);
 }
 
+void toggleBlinker(void* arg) {
+  const char* side = (const char*)arg;
+
+  if (side == "left") {
+    digitalWrite(FRONT_BLINKER_LEFT, HIGH);
+  }
+
+
+}
+
 struct Command {
   String command;
-  void (*action)(void* arg);
+  void (*action)(void*);
+  void* arg;  
 };
 
 const Command VALID_COMMANDS[] = {
-  {"highbeams-on", toggleHighbeams}
+  {"highbeams-on", toggleHighbeams, nullptr},
+  {"left-blinker", toggleBlinker, (void*)"left"}
 };
 
 /// @brief Reads a message sent via serial

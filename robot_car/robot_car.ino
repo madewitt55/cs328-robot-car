@@ -117,34 +117,42 @@ String pwm_data = "";
 String rpm_data = "";
 
 void loop() {
-  analogWrite(MOTOR_PWM_A, speed);
-  digitalWrite(INA1A, HIGH);
-  analogWrite(MOTOR_PWM_B, speed);
-  digitalWrite(INA1B, HIGH);
+  String command = readMessage();
+    if (command == "waylon likes boys") {
+      while (speed <= 255) {
+        analogWrite(MOTOR_PWM_A, speed);
+        digitalWrite(INA1A, HIGH);
+        analogWrite(MOTOR_PWM_B, speed);
+        digitalWrite(INA1B, HIGH);
 
-  delay(250);
+        delay(30);
 
-  INA1A_count = 0;
-  delay(100);
+        INA1B_count = 0;
+        delay(100);
 
-  pwm_data += (String(speed) + ",");
-  rpm_data += (String(INA1A_count * 3.125) + ",");
-  Serial2.println("PWM: " + String(speed) + ", RPMS: " + String(INA1A_count * 3.125));
-  
-  speed += 5;
+        pwm_data += (String(speed) + ",");
+        rpm_data += (String(INA1B_count * 3.125) + ",");
+        Serial2.println("PWM: " + String(speed) + ", RPMS: " + String(INA1B_count * 3.125)); // Print individual data point
+        speed += 5;
+      }
+      analogWrite(MOTOR_PWM_A, 0);
+      analogWrite(MOTOR_PWM_B, 0);
 
-  if (speed > 255) {
-    analogWrite(MOTOR_PWM_A, 0);
-    analogWrite(MOTOR_PWM_B, 0);
-    Serial2.println("PWM: " + pwm_data);
-    Serial2.println("RPM: " + rpm_data);
-    while (true) {}
-  };
+        // Print full data
+        Serial2.println("PWM: " + pwm_data);
+        Serial2.println("RPM: " + rpm_data);
+      
 
-  // String command = readMessage();
-  // for (Command com: VALID_COMMANDS) {
-  //   if (com.command == command) {
-  //     com.action(com.arg);
-  //   }
-  // }
-}
+      // Sequence complete
+      // if (speed > 255) {
+      //   analogWrite(MOTOR_PWM_A, 0);
+      //   analogWrite(MOTOR_PWM_B, 0);
+
+      //   // Print full data
+      //   Serial2.println("PWM: " + pwm_data);
+      //   Serial2.println("RPM: " + rpm_data);
+
+      //   while (true) {} // Wait to stop speed up sequence 
+      // };
+    }
+  }

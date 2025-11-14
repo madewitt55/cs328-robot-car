@@ -1,3 +1,13 @@
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+Adafruit_SSD1306 display(128, 32, &Wire, -1);
+
+const float WHEEL_DIAMETER = 2.6875; // Inches
+const int DEFAULT_SPEED = 100;
+
 const byte HIGHBEAM_LEFT = 47;
 const byte HIGHBEAM_RIGHT = 41;
 
@@ -16,39 +26,36 @@ const byte ENCODER_B_2 = 19;
 const byte INA1B = 30;
 const byte INA2B = 36;
 
-void toggleHighbeams(void* arg) {
-  bool state = *(bool*)arg;
+void toggleHighbeams(bool state) {
   digitalWrite(HIGHBEAM_LEFT, state);
   digitalWrite(HIGHBEAM_RIGHT, state);
 }
 
-void toggleLeftBlinker(void* arg) {
-  bool state = *(bool*)arg;
+void toggleLeftBlinker(bool state) {
   Serial.println(state);
   digitalWrite(FRONT_BLINKER_LEFT, state);
 }
 
-void toggleRightBlinker(void* arg) {
-  bool state = *(bool*)arg;
+void toggleRightBlinker(bool state) {
   digitalWrite(FRONT_BLINKER_RIGHT, state);
 }
 
-struct Command {
-  String command;
-  void (*action)(void*);
-  void* arg;  
-};
+// struct Command {
+//   String command;
+//   void (*action)(void*);
+//   void* arg;  
+// };
 
-bool TRUE_ARG = true;
-bool FALSE_ARG = false;
-const Command VALID_COMMANDS[] = {
-  {"highbeams-on", toggleHighbeams, &TRUE_ARG},
-  {"highbeams-off", toggleHighbeams, &FALSE_ARG},
-  {"left-blinker-on", toggleLeftBlinker, &TRUE_ARG},
-  {"left-blinker-off", toggleLeftBlinker, &FALSE_ARG},
-  {"right-blinker-on", toggleRightBlinker, &TRUE_ARG},
-  {"right-blinker-off", toggleRightBlinker, &FALSE_ARG}
-};
+// bool TRUE_ARG = true;
+// bool FALSE_ARG = false;
+// const Command VALID_COMMANDS[] = {
+//   {"highbeams-on", toggleHighbeams, &TRUE_ARG},
+//   {"highbeams-off", toggleHighbeams, &FALSE_ARG},
+//   {"left-blinker-on", toggleLeftBlinker, &TRUE_ARG},
+//   {"left-blinker-off", toggleLeftBlinker, &FALSE_ARG},
+//   {"right-blinker-on", toggleRightBlinker, &TRUE_ARG},
+//   {"right-blinker-off", toggleRightBlinker, &FALSE_ARG}
+// };
 
 /// @brief Reads a message sent via serial
 ///
@@ -69,22 +76,47 @@ String readMessage() {
   return message;
 }
 
-static volatile int16_t INA1A_count = 0;
-static volatile int16_t INA1B_count = 0;
-static volatile int16_t INA2A_count = 0;
-static volatile int16_t INA2B_count = 0;
+void updateTimer(unsigned long countMillis) {
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  String timeString = "";
+  if (countMillis >= 60000) {
+    timeString = String(countMillis / 60000) + ":";
+  }
+  timeString += String((countMillis % 60000) / 1000) + "." + String(countMillis % 1000);
+  display.print(timeString);
+  display.display();
+}
 
-void ISR_1A() {
-  INA1A_count++;
+void forward(int speed=DEFAULT_SPEED) {
+  analogWrite(MOTOR_PWM_A, speed);
+  analogWrite(MOTOR_PWM_B, speed);
+  digitalWrite(INA1A, HIGH);
+  digitalWrite(INA1B, HIGH);
 }
-void ISR_2A() {
-  INA2A_count++;
+
+void stop() {
+  analogWrite(MOTOR_PWM_A, 0);
+  analogWrite(MOTOR_PWM_B, 0);
+  digitalWrite(INA1A, LOW);
+  digitalWrite(INA1B, LOW);
 }
-void ISR_1B() {
-  INA1B_count++;
-}
-void ISR_2B() {
-  INA2B_count++;
+
+void turn(bool direction, int speed=DEFAULT_SPEED) {
+  // Right
+  if (direction) {
+    analogWrite(MOTOR_PWM_B, speed);
+    analogWrite(MOTOR_PWM_A, -1 * speed);
+    digitalWrite(INA1B, HIGH);
+    digitalWrite(INA1A, HIGH);
+  }
+  // Left
+  else {
+    analogWrite(MOTOR_PWM_B, -1 * speed);
+    analogWrite(MOTOR_PWM_A, speed);
+    digitalWrite(INA1B, HIGH);
+    digitalWrite(INA1A, HIGH);
+  }
 }
 
 void setup() {
@@ -110,49 +142,68 @@ void setup() {
 
   attachInterrupt(digitalPinToInterrupt(ENCODER_A_1), ISR_1A, FALLING);
   attachInterrupt(digitalPinToInterrupt(ENCODER_B_1), ISR_1B, FALLING);
+
+  Wire.begin();
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextWrap(false);
 }
 
-unsigned int speed = 0;
-String pwm_data = "";
-String rpm_data = "";
+static volatile int16_t INA1A_count = 0;
+static volatile int16_t INA1B_count = 0;
+static volatile int16_t INA2A_count = 0;
+static volatile int16_t INA2B_count = 0;
+void ISR_1A() {
+  INA1A_count++;
+}
+void ISR_2A() {
+  INA2A_count++;
+}
+void ISR_1B() {
+  INA1B_count++;
+}
+void ISR_2B() {
+  INA2B_count++;
+}
+
+void travelDistance(float distance, int speed=DEFAULT_SPEED) {
+  unsigned long previous_millis = millis();
+  float distance_traveled = 0;
+  float rpm = 0;
+  do {
+    distance_traveled = (rpm * (millis() / 60000.0)) * (3.14 * WHEEL_DIAMETER);
+    forward(speed);
+    if (millis() - previous_millis >= 100) {
+      rpm = INA1B_count * 3.125;
+      INA1B_count = 0;
+      previous_millis = millis();
+    }
+  } while (distance_traveled < distance);
+  stop();
+}
+
+unsigned long previous_millis = millis(); // Used to measure RPMs
+float rpm = 0;
+float distance_traveled = 0;
 
 void loop() {
-  String command = readMessage();
-    if (command == "waylon likes boys") {
-      while (speed <= 255) {
-        analogWrite(MOTOR_PWM_A, speed);
-        digitalWrite(INA1A, HIGH);
-        analogWrite(MOTOR_PWM_B, speed);
-        digitalWrite(INA1B, HIGH);
+  // forward(100);
+  // if (millis() - previous_millis >= 100) {
+  //   rpm = INA1B_count * 3.125;
+  //   INA1B_count = 0;
+  //   previous_millis = millis();
+  // }
 
-        delay(30);
+  // distance_traveled = (rpm * (millis() / 60000.0)) * (3.14 * WHEEL_DIAMETER);
+  // if (distance_traveled >= 36) { // 3 feet
+  //   stop();
+  //   while (true) {}
+  // }
 
-        INA1B_count = 0;
-        delay(100);
-
-        pwm_data += (String(speed) + ",");
-        rpm_data += (String(INA1B_count * 3.125) + ",");
-        Serial2.println("PWM: " + String(speed) + ", RPMS: " + String(INA1B_count * 3.125)); // Print individual data point
-        speed += 5;
-      }
-      analogWrite(MOTOR_PWM_A, 0);
-      analogWrite(MOTOR_PWM_B, 0);
-
-        // Print full data
-        Serial2.println("PWM: " + pwm_data);
-        Serial2.println("RPM: " + rpm_data);
-      
-
-      // Sequence complete
-      // if (speed > 255) {
-      //   analogWrite(MOTOR_PWM_A, 0);
-      //   analogWrite(MOTOR_PWM_B, 0);
-
-      //   // Print full data
-      //   Serial2.println("PWM: " + pwm_data);
-      //   Serial2.println("RPM: " + rpm_data);
-
-      //   while (true) {} // Wait to stop speed up sequence 
-      // };
-    }
-  }
+  //travelDistance(36);
+  turn(true, 30);
+  while (true) {}
+  //updateTimer(millis());
+}

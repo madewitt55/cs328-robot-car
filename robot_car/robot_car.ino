@@ -169,11 +169,12 @@ void ISR_2B() {
 }
 
 void travelDistance(float distance, int speed=DEFAULT_SPEED) {
+  unsigned long starting_millis = millis();
   unsigned long previous_millis = millis();
   float distance_traveled = 0;
   float rpm = 0;
   do {
-    distance_traveled = (rpm * (millis() / 60000.0)) * (3.14 * WHEEL_DIAMETER);
+    distance_traveled = (rpm * ((millis() - starting_millis) / 60000.0)) * (3.14 * WHEEL_DIAMETER);
     forward(speed);
     if (millis() - previous_millis >= 100) {
       rpm = INA1B_count * 3.125;
@@ -184,26 +185,15 @@ void travelDistance(float distance, int speed=DEFAULT_SPEED) {
   stop();
 }
 
-unsigned long previous_millis = millis(); // Used to measure RPMs
-float rpm = 0;
-float distance_traveled = 0;
-
+int speed = 100;
 void loop() {
-  // forward(100);
-  // if (millis() - previous_millis >= 100) {
-  //   rpm = INA1B_count * 3.125;
-  //   INA1B_count = 0;
-  //   previous_millis = millis();
-  // }
-
-  // distance_traveled = (rpm * (millis() / 60000.0)) * (3.14 * WHEEL_DIAMETER);
-  // if (distance_traveled >= 36) { // 3 feet
-  //   stop();
-  //   while (true) {}
-  // }
-
-  //travelDistance(36);
-  turn(true, 30);
-  while (true) {}
-  //updateTimer(millis());
+  String command = readMessage();
+  
+  if (command == "go") {
+    travelDistance(36, speed);
+    command = "";
+  }
+  else if (command.length()) {
+    speed = command.toInt();
+  }
 }

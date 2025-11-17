@@ -103,12 +103,18 @@ void stop() {
 }
 
 void turn(bool direction, int speed=DEFAULT_SPEED) {
+
+  
   // Right
   if (direction) {
-    analogWrite(MOTOR_PWM_B, speed);
-    analogWrite(MOTOR_PWM_A, -1 * speed);
+    analogWrite(MOTOR_PWM_B, 100);
     digitalWrite(INA1B, HIGH);
+    digitalWrite(INA2B, HIGH);
+
+    analogWrite(MOTOR_PWM_A, 100);
     digitalWrite(INA1A, HIGH);
+    digitalWrite(INA1B, LOW);
+    
   }
   // Left
   else {
@@ -188,12 +194,18 @@ void travelDistance(float distance, int speed=DEFAULT_SPEED) {
 int speed = 100;
 void loop() {
   String command = readMessage();
+
+  if (command == "turn") {
+
+
+    turn(true, 100);
+  }
   
-  if (command == "go") {
-    travelDistance(36, speed);
-    command = "";
-  }
-  else if (command.length()) {
-    speed = command.toInt();
-  }
+  // if (command == "go") {
+  //   travelDistance(36, speed);
+  //   command = "";
+  // }
+  // else if (command.length()) {
+  //   speed = command.toInt();
+  // }
 }

@@ -76,14 +76,34 @@ String readMessage() {
   return message;
 }
 
-void updateTimer(unsigned long countMillis) {
+static volatile int16_t INA1A_count = 0;
+static volatile int16_t INA1B_count = 0;
+static volatile int16_t INA2A_count = 0;
+static volatile int16_t INA2B_count = 0;
+void ISR_1A() {
+  INA1A_count++;
+}
+void ISR_2A() {
+  INA2A_count++;
+}
+void ISR_1B() {
+  INA1B_count++;
+}
+void ISR_2B() {
+  INA2B_count++;
+}
+
+unsigned long startingMillis = millis();
+
+void updateTimer() {
+  unsigned long millisPassed = millis() - startingMillis;
   display.clearDisplay();
   display.setCursor(0, 0);
   String timeString = "";
-  if (countMillis >= 60000) {
-    timeString = String(countMillis / 60000) + ":";
+  if (millisPassed >= 60000) {
+    timeString = String(millisPassed / 60000) + ":";
   }
-  timeString += String((countMillis % 60000) / 1000) + "." + String(countMillis % 1000);
+  timeString += String((millisPassed % 60000) / 1000) + "." + String(millisPassed % 1000);
   display.print(timeString);
   display.display();
 }
@@ -92,7 +112,9 @@ void forward(int speed=DEFAULT_SPEED) {
   analogWrite(MOTOR_PWM_A, speed);
   analogWrite(MOTOR_PWM_B, speed);
   digitalWrite(INA1A, HIGH);
+  digitalWrite(INA2A, LOW);
   digitalWrite(INA1B, HIGH);
+  digitalWrite(INA2B, LOW);
 }
 
 void stop() {
@@ -102,24 +124,36 @@ void stop() {
   digitalWrite(INA1B, LOW);
 }
 
-void turn(bool direction, int speed=DEFAULT_SPEED) {
-
-  
+void turn(bool direction, float angle) {
   // Right
   if (direction) {
-    analogWrite(MOTOR_PWM_B, 100);
-    digitalWrite(INA1B, HIGH);
-    digitalWrite(INA2B, HIGH);
+    unsigned long starting_millis = millis();
+    unsigned long previous_millis = millis();
+    float distance_traveled = 0;
+    float rpm = 0;
+    do {
+      updateTimer();
+      distance_traveled = (rpm * ((millis() - starting_millis) / 60000.0)) * (3.14 * WHEEL_DIAMETER);
+      analogWrite(MOTOR_PWM_B, 63);
+      digitalWrite(INA1B, HIGH);
+      digitalWrite(INA2B, HIGH);
 
-    analogWrite(MOTOR_PWM_A, 100);
-    digitalWrite(INA1A, HIGH);
-    digitalWrite(INA1B, LOW);
-    
+      analogWrite(MOTOR_PWM_A, 63);
+      digitalWrite(INA1A, HIGH);
+      digitalWrite(INA1B, LOW);
+      if (millis() - previous_millis >= 100) {
+        rpm = INA1B_count * 3.125;
+        INA1B_count = 0;
+        previous_millis = millis();
+      }
+      Serial2.println(distance_traveled);
+    } while (distance_traveled < (WHEEL_DIAMETER * 9.75) * (angle / 360));
+    stop();
   }
   // Left
   else {
-    analogWrite(MOTOR_PWM_B, -1 * speed);
-    analogWrite(MOTOR_PWM_A, speed);
+    analogWrite(MOTOR_PWM_B, -1 * 60);
+    analogWrite(MOTOR_PWM_A, 60);
     digitalWrite(INA1B, HIGH);
     digitalWrite(INA1A, HIGH);
   }
@@ -157,29 +191,13 @@ void setup() {
   display.setTextWrap(false);
 }
 
-static volatile int16_t INA1A_count = 0;
-static volatile int16_t INA1B_count = 0;
-static volatile int16_t INA2A_count = 0;
-static volatile int16_t INA2B_count = 0;
-void ISR_1A() {
-  INA1A_count++;
-}
-void ISR_2A() {
-  INA2A_count++;
-}
-void ISR_1B() {
-  INA1B_count++;
-}
-void ISR_2B() {
-  INA2B_count++;
-}
-
 void travelDistance(float distance, int speed=DEFAULT_SPEED) {
   unsigned long starting_millis = millis();
   unsigned long previous_millis = millis();
   float distance_traveled = 0;
   float rpm = 0;
   do {
+    updateTimer();
     distance_traveled = (rpm * ((millis() - starting_millis) / 60000.0)) * (3.14 * WHEEL_DIAMETER);
     forward(speed);
     if (millis() - previous_millis >= 100) {
@@ -195,17 +213,24 @@ int speed = 100;
 void loop() {
   String command = readMessage();
 
-  if (command == "turn") {
-
-
-    turn(true, 100);
+  if (command == "start") {
+    startingMillis = millis();
+    travelDistance(36, speed);
+    delay(20);
+    turn(true, 90);
+    delay(20);
+    travelDistance(36, speed);
+    delay(20);
+    turn(true, 90);
+    delay(20);
+    travelDistance(36, speed);
+    delay(20);
+    turn(true, 90);
+    delay(20);
+    travelDistance(36, speed);
   }
-  
-  // if (command == "go") {
-  //   travelDistance(36, speed);
-  //   command = "";
-  // }
-  // else if (command.length()) {
-  //   speed = command.toInt();
-  // }
+  else if (command.length()) {
+    speed = command.toInt();
+  }
+  command = "";
 }

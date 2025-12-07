@@ -29,6 +29,10 @@ const byte ENCODER_B_2 = 19;
 const byte INA1B = 30;
 const byte INA2B = 36;
 
+const byte LINE_TRACKING_LEFT = 8;
+const byte LINE_TRACKING_CENTER = 7;
+const byte LINE_TRACKING_RIGHT = 6;
+
 /// @brief Turns on or off highbeams
 ///
 /// @param state - State to set highbeams to
@@ -188,12 +192,12 @@ void turn(bool direction, float angle, int speed=60) {
       updateTimer();
 
       analogWrite(MOTOR_PWM_B, speed);
-      digitalWrite(INA1B, HIGH);
+      digitalWrite(INA1B, LOW);
       digitalWrite(INA2B, HIGH);
 
       analogWrite(MOTOR_PWM_A, speed);
       digitalWrite(INA1A, HIGH);
-      digitalWrite(INA1B, LOW);
+      digitalWrite(INA2A, LOW);
 
       // Update RPMs every 50ms
       if (millis() - previous_millis >= 50) {
@@ -217,13 +221,13 @@ void turn(bool direction, float angle, int speed=60) {
       digitalWrite(INA2B, LOW);
 
       analogWrite(MOTOR_PWM_A, speed);
-      digitalWrite(INA1A, HIGH);
-      digitalWrite(INA1B, HIGH);
+      digitalWrite(INA1A, LOW);
+      digitalWrite(INA2A, HIGH);
 
       // Update RPMs every 50ms
-      if (millis() - previous_millis >= 50) {
+      if (millis() - previous_millis >= 25) {
         toggleLeftBlinker(!digitalRead(FRONT_BLINKER_LEFT)); // Flip blinker state
-        rpm = INA1A_count * 6.25;
+        rpm = INA1A_count * 12.5;
         distance_traveled += (rpm * (100 / 60000.0)) * (3.14 * WHEEL_DIAMETER);
         INA1A_count = 0;
         previous_millis = millis();
@@ -231,6 +235,59 @@ void turn(bool direction, float angle, int speed=60) {
     } while (distance_traveled < (WHEEL_DIAMETER * 18) * (angle / 360));
     stop();
     toggleLeftBlinker(false); // Blinker off
+  }
+}
+
+bool adjustToLine() {
+  bool left = digitalRead(LINE_TRACKING_LEFT);
+  bool center = digitalRead(LINE_TRACKING_CENTER);
+  bool right = 1;//digitalRead(LINE_TRACKING_RIGHT);
+
+  Serial.print(left);
+  Serial.print(center);
+  Serial.print(right);
+  Serial.println();
+
+  // On center
+  if (center) {
+    return true;
+  }
+  // Off center to right
+  else if (left) {
+    while (!center) {
+      center = digitalRead(LINE_TRACKING_CENTER);
+
+      // Turn left
+      analogWrite(MOTOR_PWM_B, 40);
+      digitalWrite(INA1B, HIGH);
+      digitalWrite(INA2B, LOW);
+
+      analogWrite(MOTOR_PWM_A, 40);
+      digitalWrite(INA1A, LOW);
+      digitalWrite(INA2A, HIGH);
+    }
+    stop();
+    return true;
+  }
+  // Off center to left
+  else if (right) {
+    while (!center) {
+      center = digitalRead(LINE_TRACKING_CENTER);
+
+      // Turn right
+      analogWrite(MOTOR_PWM_B, 40);
+      digitalWrite(INA1B, LOW);
+      digitalWrite(INA2B, HIGH);
+
+      analogWrite(MOTOR_PWM_A, 40);
+      digitalWrite(INA1A, HIGH);
+      digitalWrite(INA2A, LOW);
+    }
+    stop();
+    return true;
+  }
+  else {
+    return false;
   }
 }
 
@@ -252,6 +309,10 @@ void setup() {
 
   pinMode(ENCODER_A_1, INPUT_PULLUP);
   pinMode(ENCODER_B_1, INPUT_PULLUP);
+
+  pinMode(LINE_TRACKING_LEFT, INPUT_PULLUP);
+  pinMode(LINE_TRACKING_CENTER, INPUT_PULLUP);
+  pinMode(LINE_TRACKING_RIGHT, INPUT_PULLUP);
 
   analogWrite(MOTOR_PWM_A, 0);
   analogWrite(MOTOR_PWM_B, 0);
@@ -275,24 +336,11 @@ int travel_speed = 60; // PWM
 int turning_speed = 80; // PWM
 int pause = 35; // Delay between driving and turning
 void loop() {
-  String command = readMessage();
-
-  if (command == "start") {
-    startingMillis = millis();
-    travelDistance(54, travel_speed);
-    delay(pause);
-    turn(true, 85, turning_speed);
-    delay(pause);
-    travelDistance(52, travel_speed);
-    delay(pause);
-    turn(true, 79, turning_speed);
-    delay(pause);
-    travelDistance(53, travel_speed);
-    delay(pause);
-    turn(true, 79, turning_speed);
-    delay(pause);
-    travelDistance(46, travel_speed);
+  forward(60);
+  delay(30);
+  while (!adjustToLine()) {
+    stop();
   }
-
-  command = "";
+  delay(30);
 }
+

@@ -238,7 +238,7 @@ void turn(bool direction, float angle, int speed=60) {
   }
 }
 
-bool adjustToLine() {
+bool adjustToLine(int speed=40) {
   bool left = digitalRead(LINE_TRACKING_LEFT);
   bool center = digitalRead(LINE_TRACKING_CENTER);
   bool right = 1;//digitalRead(LINE_TRACKING_RIGHT);

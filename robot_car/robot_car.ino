@@ -2,8 +2,14 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <protothreads.h>
+#include "pitches.h"
+
+pt ptBuzzer;
 
 Adafruit_SSD1306 display(128, 32, &Wire, -1);
+
+const byte BUZZER = 4;
 
 const float WHEEL_DIAMETER = 2.6875; // Inches
 const int DEFAULT_SPEED = 100;
@@ -32,6 +38,73 @@ const byte INA2B = 36;
 const byte LINE_TRACKING_LEFT = 8;
 const byte LINE_TRACKING_CENTER = 7;
 const byte LINE_TRACKING_RIGHT = 6;
+
+int playSong(struct pt* thread) {
+  int melody[] = {
+    NOTE_AS4, NOTE_AS4, NOTE_AS4,
+    NOTE_F5, NOTE_C6,
+    NOTE_AS5, NOTE_A5, NOTE_G5, NOTE_F6, NOTE_C6,
+    NOTE_AS5, NOTE_A5, NOTE_G5, NOTE_F6, NOTE_C6,
+    NOTE_AS5, NOTE_A5, NOTE_AS5, NOTE_G5, NOTE_C5, NOTE_C5, NOTE_C5,
+    NOTE_F5, NOTE_C6,
+    NOTE_AS5, NOTE_A5, NOTE_G5, NOTE_F6, NOTE_C6,
+
+    NOTE_AS5, NOTE_A5, NOTE_G5, NOTE_F6, NOTE_C6,
+    NOTE_AS5, NOTE_A5, NOTE_AS5, NOTE_G5, NOTE_C5, NOTE_C5,
+    NOTE_D5, NOTE_D5, NOTE_AS5, NOTE_A5, NOTE_G5, NOTE_F5,
+    NOTE_F5, NOTE_G5, NOTE_A5, NOTE_G5, NOTE_D5, NOTE_E5, NOTE_C5, NOTE_C5,
+    NOTE_D5, NOTE_D5, NOTE_AS5, NOTE_A5, NOTE_G5, NOTE_F5,
+
+    NOTE_C6, NOTE_G5, NOTE_G5, REST, NOTE_C5,
+    NOTE_D5, NOTE_D5, NOTE_AS5, NOTE_A5, NOTE_G5, NOTE_F5,
+    NOTE_F5, NOTE_G5, NOTE_A5, NOTE_G5, NOTE_D5, NOTE_E5, NOTE_C6, NOTE_C6,
+    NOTE_F6, NOTE_DS6, NOTE_CS6, NOTE_C6, NOTE_AS5, NOTE_GS5, NOTE_G5, NOTE_F5,
+    NOTE_C6
+  };
+
+  int durations[] = {
+    8, 8, 8,
+    2, 2,
+    8, 8, 8, 2, 4,
+    8, 8, 8, 2, 4,
+    8, 8, 8, 2, 8, 8, 8,
+    2, 2,
+    8, 8, 8, 2, 4,
+
+    8, 8, 8, 2, 4,
+    8, 8, 8, 2, 8, 16,
+    4, 8, 8, 8, 8, 8,
+    8, 8, 8, 4, 8, 4, 8, 16,
+    4, 8, 8, 8, 8, 8,
+
+    8, 16, 2, 8, 8,
+    4, 8, 8, 8, 8, 8,
+    8, 8, 8, 4, 8, 4, 8, 16,
+    4, 8, 4, 8, 4, 8, 4, 8,
+    1
+  };
+  PT_BEGIN(thread);
+
+  int size = sizeof(durations) / sizeof(int);
+
+  static int note = 0;
+  for (note = 0; note < size; note++) {
+    //to calculate the note duration, take one second divided by the note type.
+    //e.g. quarter note = 1000 / 4, eighth note = 1000/8, etc.
+    int duration = 1000 / durations[note];
+    tone(BUZZER, melody[note], duration);
+
+    //to distinguish the notes, set a minimum time between them.
+    //the note's duration + 30% seems to work well:
+    int pauseBetweenNotes = duration * 1.30;
+    PT_SLEEP(thread, pauseBetweenNotes);
+
+    //stop the tone playing:
+    noTone(BUZZER);
+  }
+
+  PT_END(thread);
+}
 
 /// @brief Turns on or off highbeams
 ///
@@ -241,12 +314,12 @@ void turn(bool direction, float angle, int speed=60) {
 bool adjustToLine(int speed=40) {
   bool left = digitalRead(LINE_TRACKING_LEFT);
   bool center = digitalRead(LINE_TRACKING_CENTER);
-  bool right = 1;//digitalRead(LINE_TRACKING_RIGHT);
+  bool right = digitalRead(LINE_TRACKING_RIGHT);
 
-  Serial.print(left);
-  Serial.print(center);
-  Serial.print(right);
-  Serial.println();
+  // Serial.print(left);
+  // Serial.print(center);
+  // Serial.print(right);
+  // Serial.println();
 
   // On center
   if (center) {
@@ -295,6 +368,10 @@ void setup() {
   Serial2.begin(38400);
   Serial.begin(9600);
 
+  PT_INIT(&ptBuzzer);
+
+  pinMode(BUZZER, OUTPUT);
+
   pinMode(MOTOR_PWM_A, OUTPUT);
   pinMode(INA1A, OUTPUT);
   pinMode(INA2A, OUTPUT);
@@ -336,11 +413,13 @@ int travel_speed = 60; // PWM
 int turning_speed = 80; // PWM
 int pause = 35; // Delay between driving and turning
 void loop() {
-  forward(60);
-  delay(30);
-  while (!adjustToLine()) {
-    stop();
-  }
-  delay(30);
+  // forward(60);
+  // delay(30);
+  // while (!adjustToLine()) {
+  //   stop();
+  // }
+  // delay(30);
+
+  PT_SCHEDULE(playSong(&ptBuzzer));
 }
 

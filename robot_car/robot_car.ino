@@ -5,7 +5,21 @@
 #include <protothreads.h>
 #include "pitches.h"
 
-pt ptBuzzer;
+struct songThread {
+  struct pt pt;
+  int note;
+  unsigned long lastNoteTime;  // Optional: for timing control
+};
+struct songThread ptSong;
+
+struct lineFollowThread {
+  struct pt pt;
+  bool left;
+  bool center;
+  bool right;
+  bool done;
+};
+struct lineFollowThread ptLineFollow;
 
 Adafruit_SSD1306 display(128, 32, &Wire, -1);
 
@@ -39,7 +53,70 @@ const byte LINE_TRACKING_LEFT = 8;
 const byte LINE_TRACKING_CENTER = 7;
 const byte LINE_TRACKING_RIGHT = 6;
 
-int playSong(struct pt* thread) {
+static volatile int16_t INA1A_count = 0;
+static volatile int16_t INA1B_count = 0;
+static volatile int16_t INA2A_count = 0;
+static volatile int16_t INA2B_count = 0;
+void ISR_1A() {
+  INA1A_count++;
+}
+void ISR_2A() {
+  INA2A_count++;
+}
+void ISR_1B() {
+  INA1B_count++;
+}
+void ISR_2B() {
+  INA2B_count++;
+}
+
+void setup() {
+  Serial2.begin(38400);
+  Serial.begin(9600);
+
+  PT_INIT(&ptSong.pt);
+  PT_INIT(&ptLineFollow.pt);
+
+  pinMode(BUZZER, OUTPUT);
+
+  pinMode(MOTOR_PWM_A, OUTPUT);
+  pinMode(INA1A, OUTPUT);
+  pinMode(INA2A, OUTPUT);
+  pinMode(MOTOR_PWM_B, OUTPUT);
+  pinMode(INA1B, OUTPUT);
+  pinMode(INA2B, OUTPUT);
+
+  pinMode(FRONT_BLINKER_LEFT, OUTPUT);
+  pinMode(FRONT_BLINKER_RIGHT, OUTPUT);
+  pinMode(BRAKE_LIGHT_LEFT, OUTPUT);
+  pinMode(BRAKE_LIGHT_RIGHT, OUTPUT);
+
+  pinMode(ENCODER_A_1, INPUT_PULLUP);
+  pinMode(ENCODER_B_1, INPUT_PULLUP);
+
+  pinMode(LINE_TRACKING_LEFT, INPUT_PULLUP);
+  pinMode(LINE_TRACKING_CENTER, INPUT_PULLUP);
+  pinMode(LINE_TRACKING_RIGHT, INPUT_PULLUP);
+
+  analogWrite(MOTOR_PWM_A, 0);
+  analogWrite(MOTOR_PWM_B, 0);
+  digitalWrite(INA1A, LOW);
+  digitalWrite(INA2A, LOW);
+  digitalWrite(INA1B, LOW);
+  digitalWrite(INA2B, LOW);
+
+  attachInterrupt(digitalPinToInterrupt(ENCODER_A_1), ISR_1A, FALLING);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_B_1), ISR_1B, FALLING);
+
+  Wire.begin();
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextWrap(false);
+}
+
+int playSong(struct songThread* thread) {
   int melody[] = {
     NOTE_AS4, NOTE_AS4, NOTE_AS4,
     NOTE_F5, NOTE_C6,
@@ -83,27 +160,25 @@ int playSong(struct pt* thread) {
     4, 8, 4, 8, 4, 8, 4, 8,
     1
   };
-  PT_BEGIN(thread);
+  
+  PT_BEGIN(&thread->pt);
 
   int size = sizeof(durations) / sizeof(int);
 
-  static int note = 0;
-  for (note = 0; note < size; note++) {
-    //to calculate the note duration, take one second divided by the note type.
-    //e.g. quarter note = 1000 / 4, eighth note = 1000/8, etc.
-    int duration = 1000 / durations[note];
-    tone(BUZZER, melody[note], duration);
+  for (thread->note = 0; thread->note < size; thread->note++) {
+    Serial.println(thread->note);
+    int duration = 1000 / durations[thread->note];
+    tone(BUZZER, melody[thread->note], duration);
 
-    //to distinguish the notes, set a minimum time between them.
-    //the note's duration + 30% seems to work well:
     int pauseBetweenNotes = duration * 1.30;
-    PT_SLEEP(thread, pauseBetweenNotes);
+    PT_SLEEP(&thread->pt, pauseBetweenNotes);
 
-    //stop the tone playing:
     noTone(BUZZER);
   }
+  
+  thread->note = 0;  // Reset for next play
 
-  PT_END(thread);
+  PT_END(&thread->pt);
 }
 
 /// @brief Turns on or off highbeams
@@ -156,41 +231,6 @@ String readMessage() {
   return message;
 }
 
-static volatile int16_t INA1A_count = 0;
-static volatile int16_t INA1B_count = 0;
-static volatile int16_t INA2A_count = 0;
-static volatile int16_t INA2B_count = 0;
-void ISR_1A() {
-  INA1A_count++;
-}
-void ISR_2A() {
-  INA2A_count++;
-}
-void ISR_1B() {
-  INA1B_count++;
-}
-void ISR_2B() {
-  INA2B_count++;
-}
-
-unsigned long startingMillis = millis();
-
-/// @brief Updates the OLED screen with elapsed time
-///
-/// Timer starting time taking from variable startingMillis
-void updateTimer() {
-  unsigned long millisPassed = millis() - startingMillis;
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  String timeString = "";
-  if (millisPassed >= 60000) {
-    timeString = String(millisPassed / 60000) + ":";
-  }
-  timeString += String((millisPassed % 60000) / 1000) + "." + String(millisPassed % 1000);
-  display.print(timeString);
-  display.display();
-}
-
 /// @brief Moves the car foward
 ///
 /// Car will move forward until stop function is called
@@ -231,8 +271,6 @@ void travelDistance(float distance, int speed=DEFAULT_SPEED) {
   float rpm = 0;
   INA1B_count = 0;
   do {
-    updateTimer();
-    
     forward(speed);
     // Update RPMs every 50ms
     if (millis() - previous_millis >= 50) {
@@ -262,8 +300,6 @@ void turn(bool direction, float angle, int speed=60) {
   // Right
   if (direction) {
     do {
-      updateTimer();
-
       analogWrite(MOTOR_PWM_B, speed);
       digitalWrite(INA1B, LOW);
       digitalWrite(INA2B, HIGH);
@@ -287,8 +323,6 @@ void turn(bool direction, float angle, int speed=60) {
   // Left
   else {
     do {
-      updateTimer();
-
       analogWrite(MOTOR_PWM_B, speed);
       digitalWrite(INA1B, HIGH);
       digitalWrite(INA2B, LOW);
@@ -311,115 +345,79 @@ void turn(bool direction, float angle, int speed=60) {
   }
 }
 
-bool adjustToLine(int speed=40) {
-  bool left = digitalRead(LINE_TRACKING_LEFT);
-  bool center = digitalRead(LINE_TRACKING_CENTER);
-  bool right = digitalRead(LINE_TRACKING_RIGHT);
+int adjustToLine(struct lineFollowThread* thread, int speed=60) {
+  PT_BEGIN(&thread->pt);
 
-  // Serial.print(left);
-  // Serial.print(center);
-  // Serial.print(right);
-  // Serial.println();
+  while (1) {  // Infinite loop - thread never ends
+    thread->done = false;
 
-  // On center
-  if (center) {
-    return true;
-  }
-  // Off center to right
-  else if (left) {
-    while (!center) {
-      center = digitalRead(LINE_TRACKING_CENTER);
+    // Read sensors
+    thread->left = digitalRead(LINE_TRACKING_LEFT);
+    thread->center = digitalRead(LINE_TRACKING_CENTER);
+    thread->right = digitalRead(LINE_TRACKING_RIGHT);
+    // Serial.print(thread->left);
+    // Serial.print(thread->center);
+    // Serial.print(thread->right);
+    // Serial.println();
 
-      // Turn left
-      analogWrite(MOTOR_PWM_B, 40);
-      digitalWrite(INA1B, HIGH);
-      digitalWrite(INA2B, LOW);
-
-      analogWrite(MOTOR_PWM_A, 40);
-      digitalWrite(INA1A, LOW);
-      digitalWrite(INA2A, HIGH);
+    // On center - done immediately
+    if (thread->center) {
+      thread->done = true;
+      PT_YIELD(&thread->pt);  // Yield but keep running
     }
-    stop();
-    return true;
-  }
-  // Off center to left
-  else if (right) {
-    while (!center) {
-      center = digitalRead(LINE_TRACKING_CENTER);
+    // Off center to right - need to turn left
+    else if (thread->left) {
+      while (!thread->center) {
+        thread->center = digitalRead(LINE_TRACKING_CENTER);
 
-      // Turn right
-      analogWrite(MOTOR_PWM_B, 40);
-      digitalWrite(INA1B, LOW);
-      digitalWrite(INA2B, HIGH);
+        // Turn left
+        analogWrite(MOTOR_PWM_B, speed);
+        digitalWrite(INA1B, HIGH);
+        digitalWrite(INA2B, LOW);
 
-      analogWrite(MOTOR_PWM_A, 40);
-      digitalWrite(INA1A, HIGH);
-      digitalWrite(INA2A, LOW);
+        analogWrite(MOTOR_PWM_A, speed);
+        digitalWrite(INA1A, LOW);
+        digitalWrite(INA2A, HIGH);
+
+        PT_YIELD(&thread->pt);
+      }
+      stop();
+      thread->done = true;
     }
-    stop();
-    return true;
+    // Off center to left - need to turn right
+    else if (thread->right) {
+      while (!thread->center) {
+        thread->center = digitalRead(LINE_TRACKING_CENTER);
+
+        // Turn right
+        analogWrite(MOTOR_PWM_B, speed);
+        digitalWrite(INA1B, LOW);
+        digitalWrite(INA2B, HIGH);
+
+        analogWrite(MOTOR_PWM_A, speed);
+        digitalWrite(INA1A, HIGH);
+        digitalWrite(INA2A, LOW);
+
+        PT_YIELD(&thread->pt);
+      }
+      stop();
+      thread->done = true;
+    }
+    else {
+      stop();
+      thread->done = false;
+      PT_YIELD(&thread->pt);  // Yield even when not on line
+    }
   }
-  else {
-    return false;
-  }
+  PT_END(&thread->pt);
 }
 
-void setup() {
-  Serial2.begin(38400);
-  Serial.begin(9600);
-
-  PT_INIT(&ptBuzzer);
-
-  pinMode(BUZZER, OUTPUT);
-
-  pinMode(MOTOR_PWM_A, OUTPUT);
-  pinMode(INA1A, OUTPUT);
-  pinMode(INA2A, OUTPUT);
-  pinMode(MOTOR_PWM_B, OUTPUT);
-  pinMode(INA1B, OUTPUT);
-  pinMode(INA2B, OUTPUT);
-
-  pinMode(FRONT_BLINKER_LEFT, OUTPUT);
-  pinMode(FRONT_BLINKER_RIGHT, OUTPUT);
-  pinMode(BRAKE_LIGHT_LEFT, OUTPUT);
-  pinMode(BRAKE_LIGHT_RIGHT, OUTPUT);
-
-  pinMode(ENCODER_A_1, INPUT_PULLUP);
-  pinMode(ENCODER_B_1, INPUT_PULLUP);
-
-  pinMode(LINE_TRACKING_LEFT, INPUT_PULLUP);
-  pinMode(LINE_TRACKING_CENTER, INPUT_PULLUP);
-  pinMode(LINE_TRACKING_RIGHT, INPUT_PULLUP);
-
-  analogWrite(MOTOR_PWM_A, 0);
-  analogWrite(MOTOR_PWM_B, 0);
-  digitalWrite(INA1A, LOW);
-  digitalWrite(INA2A, LOW);
-  digitalWrite(INA1B, LOW);
-  digitalWrite(INA2B, LOW);
-
-  attachInterrupt(digitalPinToInterrupt(ENCODER_A_1), ISR_1A, FALLING);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_B_1), ISR_1B, FALLING);
-
-  Wire.begin();
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextWrap(false);
-}
-
-int travel_speed = 60; // PWM
-int turning_speed = 80; // PWM
-int pause = 35; // Delay between driving and turning
 void loop() {
-  // forward(60);
-  // delay(30);
-  // while (!adjustToLine()) {
-  //   stop();
-  // }
-  // delay(30);
+  playSong(&ptSong);
+  adjustToLine(&ptLineFollow, 75);
 
-  PT_SCHEDULE(playSong(&ptBuzzer));
+  if (ptLineFollow.done) {
+    forward(60);
+  }
+  //delay(500);
 }
-

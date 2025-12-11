@@ -14,6 +14,7 @@ struct songThread ptSong;
 
 struct lineFollowThread {
   struct pt pt;
+  unsigned long last_blink;
   bool left;
   bool center;
   bool right;
@@ -23,7 +24,7 @@ struct lineFollowThread ptLineFollow;
 
 Adafruit_SSD1306 display(128, 32, &Wire, -1);
 
-const byte BUZZER = 4;
+const byte BUZZER = 13;
 
 const float WHEEL_DIAMETER = 2.6875; // Inches
 const int DEFAULT_SPEED = 100;
@@ -90,6 +91,8 @@ void setup() {
   pinMode(FRONT_BLINKER_RIGHT, OUTPUT);
   pinMode(BRAKE_LIGHT_LEFT, OUTPUT);
   pinMode(BRAKE_LIGHT_RIGHT, OUTPUT);
+  toggleLeftBlinker(false);
+  toggleRightBlinker(false);
 
   pinMode(ENCODER_A_1, INPUT_PULLUP);
   pinMode(ENCODER_B_1, INPUT_PULLUP);
@@ -116,8 +119,8 @@ void setup() {
   display.setTextWrap(false);
 }
 
-int playSong(struct songThread* thread) {
-  int melody[] = {
+PT_THREAD(playSong(struct songThread* thread)) {
+  static int melody[] = {
     NOTE_AS4, NOTE_AS4, NOTE_AS4,
     NOTE_F5, NOTE_C6,
     NOTE_AS5, NOTE_A5, NOTE_G5, NOTE_F6, NOTE_C6,
@@ -139,7 +142,7 @@ int playSong(struct songThread* thread) {
     NOTE_C6
   };
 
-  int durations[] = {
+  static int durations[] = {
     8, 8, 8,
     2, 2,
     8, 8, 8, 2, 4,
@@ -161,22 +164,36 @@ int playSong(struct songThread* thread) {
     1
   };
   
+  static const int size = sizeof(durations) / sizeof(int);
+  static unsigned long noteStartTime = 0;
+  static unsigned long noteDuration = 0;
+  
   PT_BEGIN(&thread->pt);
 
-  int size = sizeof(durations) / sizeof(int);
-
   for (thread->note = 0; thread->note < size; thread->note++) {
+    // Calculate duration for this note
+    noteDuration = (1000 / durations[thread->note]) * 1.30;
+    
+    // Start the note
+    if (melody[thread->note] != REST) {
+      tone(BUZZER, melody[thread->note]);
+    }
+    noteStartTime = millis();
+    
+    Serial.print("Playing note ");
     Serial.println(thread->note);
-    int duration = 1000 / durations[thread->note];
-    tone(BUZZER, melody[thread->note], duration);
 
-    int pauseBetweenNotes = duration * 1.30;
-    PT_SLEEP(&thread->pt, pauseBetweenNotes);
+    // Wait for note duration while yielding
+    while ((millis() - noteStartTime) < noteDuration) {
+      PT_YIELD(&thread->pt);
+    }
 
     noTone(BUZZER);
   }
   
-  thread->note = 0;  // Reset for next play
+  // Song finished, restart
+  thread->note = 0;
+  PT_RESTART(&thread->pt);
 
   PT_END(&thread->pt);
 }
@@ -193,7 +210,6 @@ void toggleHighbeams(bool state) {
 ///
 /// @param state - State to set left blinker to
 void toggleLeftBlinker(bool state) {
-  Serial.println(state);
   digitalWrite(FRONT_BLINKER_LEFT, state);
 }
 
@@ -345,79 +361,89 @@ void turn(bool direction, float angle, int speed=60) {
   }
 }
 
-int adjustToLine(struct lineFollowThread* thread, int speed=60) {
+PT_THREAD(adjustToLine(struct lineFollowThread* thread, int speed=60)) {
+  const unsigned long BLINK_DELAY = 200;
   PT_BEGIN(&thread->pt);
 
-  while (1) {  // Infinite loop - thread never ends
-    thread->done = false;
+  thread->done = false;
 
-    // Read sensors
-    thread->left = digitalRead(LINE_TRACKING_LEFT);
-    thread->center = digitalRead(LINE_TRACKING_CENTER);
-    thread->right = digitalRead(LINE_TRACKING_RIGHT);
-    // Serial.print(thread->left);
-    // Serial.print(thread->center);
-    // Serial.print(thread->right);
-    // Serial.println();
+  // Read sensors
+  thread->left = digitalRead(LINE_TRACKING_LEFT);
+  thread->center = digitalRead(LINE_TRACKING_CENTER);
+  thread->right = digitalRead(LINE_TRACKING_RIGHT);
+  Serial.print(thread->left);
+  Serial.print(thread->center);
+  Serial.print(thread->right);
+  Serial.println();
 
-    // On center - done immediately
-    if (thread->center) {
-      thread->done = true;
-      PT_YIELD(&thread->pt);  // Yield but keep running
-    }
-    // Off center to right - need to turn left
-    else if (thread->left) {
-      while (!thread->center) {
-        thread->center = digitalRead(LINE_TRACKING_CENTER);
+  // On center - done immediately
+  if (thread->center) {
+    thread->done = true;
+    PT_YIELD(&thread->pt);  // Yield but keep running
+  }
+  // Off center to right - need to turn left
+  else if (thread->left) {
+    thread->last_blink = millis();
+    while (!thread->center) {
+      thread->center = digitalRead(LINE_TRACKING_CENTER);
 
-        // Turn left
-        analogWrite(MOTOR_PWM_B, speed);
-        digitalWrite(INA1B, HIGH);
-        digitalWrite(INA2B, LOW);
-
-        analogWrite(MOTOR_PWM_A, speed);
-        digitalWrite(INA1A, LOW);
-        digitalWrite(INA2A, HIGH);
-
-        PT_YIELD(&thread->pt);
+      if (millis() - thread->last_blink >= BLINK_DELAY) {
+        toggleLeftBlinker(!digitalRead(FRONT_BLINKER_LEFT));
+        thread->last_blink = millis();
       }
-      stop();
-      thread->done = true;
+
+      // Turn left
+      analogWrite(MOTOR_PWM_B, speed);
+      digitalWrite(INA1B, HIGH);
+      digitalWrite(INA2B, LOW);
+
+      analogWrite(MOTOR_PWM_A, speed);
+      digitalWrite(INA1A, LOW);
+      digitalWrite(INA2A, HIGH);
+
+      PT_YIELD(&thread->pt);
     }
-    // Off center to left - need to turn right
-    else if (thread->right) {
-      while (!thread->center) {
-        thread->center = digitalRead(LINE_TRACKING_CENTER);
+    stop();
+    toggleLeftBlinker(false);
+    thread->done = true;
+  }
+  // Off center to left - need to turn right
+  else if (thread->right) {
+    thread->last_blink = millis();
+    while (!thread->center) {
+      thread->center = digitalRead(LINE_TRACKING_CENTER);
 
-        // Turn right
-        analogWrite(MOTOR_PWM_B, speed);
-        digitalWrite(INA1B, LOW);
-        digitalWrite(INA2B, HIGH);
-
-        analogWrite(MOTOR_PWM_A, speed);
-        digitalWrite(INA1A, HIGH);
-        digitalWrite(INA2A, LOW);
-
-        PT_YIELD(&thread->pt);
+      if (millis() - thread->last_blink >= BLINK_DELAY) {
+        toggleRightBlinker(!digitalRead(FRONT_BLINKER_RIGHT));
+        thread->last_blink = millis();
       }
-      stop();
-      thread->done = true;
+
+      // Turn right
+      analogWrite(MOTOR_PWM_B, speed);
+      digitalWrite(INA1B, LOW);
+      digitalWrite(INA2B, HIGH);
+
+      analogWrite(MOTOR_PWM_A, speed);
+      digitalWrite(INA1A, HIGH);
+      digitalWrite(INA2A, LOW);
+
+      PT_YIELD(&thread->pt);
     }
-    else {
-      stop();
-      thread->done = false;
-      PT_YIELD(&thread->pt);  // Yield even when not on line
-    }
+    stop();
+    toggleRightBlinker(false);
+    thread->done = true;
   }
   PT_END(&thread->pt);
 }
 
 void loop() {
-  playSong(&ptSong);
-  adjustToLine(&ptLineFollow, 75);
-
+  PT_SCHEDULE(adjustToLine(&ptLineFollow, 75));
+  PT_SCHEDULE(playSong(&ptSong));
+  // adjustToLine(&ptLineFollow, 75);
+  // playSong(&ptSong);
+  
+  //Serial.println(ptLineFollow.done);
   if (ptLineFollow.done) {
     forward(60);
   }
-  //delay(500);
 }

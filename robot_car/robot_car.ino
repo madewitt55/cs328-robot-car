@@ -22,18 +22,38 @@ struct lineFollowThread {
 };
 struct lineFollowThread ptLineFollow;
 
+struct distanceThread {
+  struct pt pt;
+  unsigned long lastMeasurement;
+  float distance;
+  bool obstacle;
+};
+struct distanceThread ptDistance;
+
+struct pt ptDisplay;
+
 Adafruit_SSD1306 display(128, 32, &Wire, -1);
+// 11 output 12 input
+
+const byte TRIG = 11;
+const byte ECHO = 12;
 
 const byte BUZZER = 13;
 
 const float WHEEL_DIAMETER = 2.6875; // Inches
+
 const int DEFAULT_SPEED = 100;
+
+const unsigned long MEASUREMENT_INTERVAL = 100; // ms between measurements
+const float OBSTACLE_THRESHOLD = 17; // inches - distance to consider as obstacle
 
 const byte HIGHBEAM_LEFT = 47;
 const byte HIGHBEAM_RIGHT = 41;
 
 const byte FRONT_BLINKER_LEFT = 49;
+const byte REAR_BLINKER_LEFT = 31;
 const byte FRONT_BLINKER_RIGHT = 43;
+const byte REAR_BLINKER_RIGHT = 37;
 
 const byte BRAKE_LIGHT_LEFT = 27;
 const byte BRAKE_LIGHT_RIGHT = 33;
@@ -77,6 +97,8 @@ void setup() {
 
   PT_INIT(&ptSong.pt);
   PT_INIT(&ptLineFollow.pt);
+  PT_INIT(&ptDistance.pt);
+  PT_INIT(&ptDisplay);
 
   pinMode(BUZZER, OUTPUT);
 
@@ -87,8 +109,13 @@ void setup() {
   pinMode(INA1B, OUTPUT);
   pinMode(INA2B, OUTPUT);
 
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+
   pinMode(FRONT_BLINKER_LEFT, OUTPUT);
+  pinMode(REAR_BLINKER_LEFT, OUTPUT);
   pinMode(FRONT_BLINKER_RIGHT, OUTPUT);
+  pinMode(REAR_BLINKER_RIGHT, OUTPUT);
   pinMode(BRAKE_LIGHT_LEFT, OUTPUT);
   pinMode(BRAKE_LIGHT_RIGHT, OUTPUT);
   toggleLeftBlinker(false);
@@ -179,9 +206,6 @@ PT_THREAD(playSong(struct songThread* thread)) {
       tone(BUZZER, melody[thread->note]);
     }
     noteStartTime = millis();
-    
-    Serial.print("Playing note ");
-    Serial.println(thread->note);
 
     // Wait for note duration while yielding
     while ((millis() - noteStartTime) < noteDuration) {
@@ -198,6 +222,79 @@ PT_THREAD(playSong(struct songThread* thread)) {
   PT_END(&thread->pt);
 }
 
+/// @brief Measures distance using ultrasonic sensor
+///
+/// @return Distance in inches
+float measureDistance() {
+  digitalWrite(TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG, LOW);
+  
+  // Read echo pulse duration
+  float duration = pulseIn(ECHO, HIGH);
+  float distance = (duration*.0343)/2;  
+  
+  return distance;
+}
+
+/// @brief Protothread for continuous distance monitoring
+///
+/// Updates distance reading at regular intervals and sets obstacle flag
+///
+/// @param thread - Pointer to distance thread structure
+PT_THREAD(monitorDistance(struct distanceThread* thread)) {
+  PT_BEGIN(&thread->pt);
+  
+  while(1) {
+    // Check if enough time has passed since last measurement
+    if (millis() - thread->lastMeasurement >= MEASUREMENT_INTERVAL) {
+      // Measure distance
+      thread->distance = measureDistance();
+      
+      // Check for obstacle
+      if (thread->distance > 0 && thread->distance < OBSTACLE_THRESHOLD) {
+        thread->obstacle = true;
+      } else {
+        thread->obstacle = false;
+      }
+      
+      // Debug output
+      Serial.print("Distance: ");
+      Serial.print(thread->distance);
+      Serial.print(" inches, Obstacle: ");
+      Serial.println(thread->obstacle ? "YES" : "NO");
+      
+      thread->lastMeasurement = millis();
+    }
+    
+    PT_YIELD(&thread->pt);
+  }
+  
+  PT_END(&thread->pt);
+}
+
+PT_THREAD(displayOLED(struct pt* thread)) {
+  PT_BEGIN(thread);
+  
+  while(1) {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("Distance: ");
+    display.setCursor(0, 10);
+    display.print(ptDistance.distance);
+    display.print(" cm");
+    display.setCursor(0, 20);
+    display.print(ptDistance.obstacle ? "OBSTACLE!" : "Clear");
+    display.display();
+    
+    PT_YIELD(thread);
+  }
+  
+  PT_END(thread);
+}
+
 /// @brief Turns on or off highbeams
 ///
 /// @param state - State to set highbeams to
@@ -211,6 +308,7 @@ void toggleHighbeams(bool state) {
 /// @param state - State to set left blinker to
 void toggleLeftBlinker(bool state) {
   digitalWrite(FRONT_BLINKER_LEFT, state);
+  digitalWrite(REAR_BLINKER_LEFT, state);
 }
 
 /// @brief Turns on or off right blinker
@@ -218,6 +316,7 @@ void toggleLeftBlinker(bool state) {
 /// @param state - State to set right blinker to
 void toggleRightBlinker(bool state) {
   digitalWrite(FRONT_BLINKER_RIGHT, state);
+  digitalWrite(REAR_BLINKER_RIGHT, state);
 }
 
 /// @brief Turns on or off brake lights
@@ -371,10 +470,6 @@ PT_THREAD(adjustToLine(struct lineFollowThread* thread, int speed=60)) {
   thread->left = digitalRead(LINE_TRACKING_LEFT);
   thread->center = digitalRead(LINE_TRACKING_CENTER);
   thread->right = digitalRead(LINE_TRACKING_RIGHT);
-  Serial.print(thread->left);
-  Serial.print(thread->center);
-  Serial.print(thread->right);
-  Serial.println();
 
   // On center - done immediately
   if (thread->center) {
@@ -403,7 +498,7 @@ PT_THREAD(adjustToLine(struct lineFollowThread* thread, int speed=60)) {
 
       PT_YIELD(&thread->pt);
     }
-    stop();
+    //stop();
     toggleLeftBlinker(false);
     thread->done = true;
   }
@@ -429,7 +524,7 @@ PT_THREAD(adjustToLine(struct lineFollowThread* thread, int speed=60)) {
 
       PT_YIELD(&thread->pt);
     }
-    stop();
+    //stop();
     toggleRightBlinker(false);
     thread->done = true;
   }
@@ -437,13 +532,56 @@ PT_THREAD(adjustToLine(struct lineFollowThread* thread, int speed=60)) {
 }
 
 void loop() {
+  //Serial.println(measureDistance());
+  PT_SCHEDULE(monitorDistance(&ptDistance));
   PT_SCHEDULE(adjustToLine(&ptLineFollow, 75));
+  PT_SCHEDULE(displayOLED(&ptDisplay));
   PT_SCHEDULE(playSong(&ptSong));
-  // adjustToLine(&ptLineFollow, 75);
-  // playSong(&ptSong);
   
-  //Serial.println(ptLineFollow.done);
-  if (ptLineFollow.done) {
+  if (ptDistance.obstacle) {
+    stop();
+    toggleHighbeams(true);
+    delay(500);
+    while (ptDistance.obstacle) {
+      PT_SCHEDULE(monitorDistance(&ptDistance));
+      PT_SCHEDULE(adjustToLine(&ptLineFollow, 85));
+      PT_SCHEDULE(displayOLED(&ptDisplay));
+      PT_SCHEDULE(playSong(&ptSong));
+
+      // Too close; force turn
+      if (ptDistance.distance <= 6.25) {
+        // Turn right until back on line
+        unsigned long last_blink = millis();
+        while (!ptLineFollow.done) {
+          PT_SCHEDULE(adjustToLine(&ptLineFollow, 85));
+          PT_SCHEDULE(displayOLED(&ptDisplay));
+          PT_SCHEDULE(playSong(&ptSong));
+
+          analogWrite(MOTOR_PWM_B, 100);
+          digitalWrite(INA1B, LOW);
+          digitalWrite(INA2B, HIGH);
+          analogWrite(MOTOR_PWM_A, 100);
+          digitalWrite(INA1A, HIGH);
+          digitalWrite(INA2A, LOW);
+
+          if (millis() - last_blink >= 200) {
+            toggleRightBlinker(!digitalRead(FRONT_BLINKER_RIGHT));
+            last_blink = millis();
+          }
+        }
+        toggleRightBlinker(false);
+      }
+
+      if (ptLineFollow.done) {
+        toggleBrakeLights(false);
+        forward(60);
+      }
+    }
+    toggleBrakeLights(false);
+    toggleHighbeams(false);
+  }
+  else if (ptLineFollow.done) {
+    toggleBrakeLights(false);
     forward(60);
   }
 }
